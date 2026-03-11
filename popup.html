@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Talentify</title>
+  <style>
+    /* ── Reset & Base ────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 360px;
+      min-height: 200px;
+      background: #0a0a14;
+      color: #e8e8f0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+    }
+
+    /* ── Header ──────────────────────────────────────── */
+    .popup-header {
+      background: linear-gradient(135deg, #6c47ff 0%, #a855f7 100%);
+      padding: 18px 20px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .popup-logo-icon {
+      font-size: 22px;
+      line-height: 1;
+    }
+    .popup-brand {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #fff;
+    }
+    .popup-tagline {
+      font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      margin-top: 2px;
+    }
+
+    /* ── Body ────────────────────────────────────────── */
+    .popup-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+    /* ── Status indicator ────────────────────────────── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #13131f;
+      border: 1px solid #2a2a40;
+      font-size: 13px;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .status-dot.inactive { background: #6b7280; }
+
+    /* ── API Key section ─────────────────────────────── */
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #8b8ba8;
+      margin-bottom: 6px;
+    }
+    .api-key-wrap {
+      position: relative;
+    }
+    .api-key-input {
+      width: 100%;
+      padding: 10px 40px 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #2a2a40;
+      background: #13131f;
+      color: #e8e8f0;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .api-key-input:focus { border-color: #6c47ff; }
+    .api-key-input::placeholder { color: #4a4a65; }
+
+    .toggle-visibility {
+      position: absolute;
+      right: 10px; top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #8b8ba8;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px;
+    }
+    .toggle-visibility:hover { color: #6c47ff; }
+
+    /* ── Buttons ─────────────────────────────────────── */
+    .btn-save {
+      width: 100%;
+      padding: 11px;
+      border-radius: 10px;
+      border: none;
+      background: linear-gradient(135deg, #6c47ff, #a855f7);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-save:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-save:active { transform: translateY(0); }
+
+    .btn-analyze {
+      width: 100%;
+      padding: 11px;
+      border-radius: 10px;
+      border: 2px solid #6c47ff;
+      background: transparent;
+      color: #a48bff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, transform 0.15s;
+    }
+    .btn-analyze:hover {
+      background: #6c47ff20;
+      color: #fff;
+      transform: translateY(-1px);
+    }
+    .btn-analyze:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Toast ───────────────────────────────────────── */
+    #popup-toast {
+      display: none;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      text-align: center;
+    }
+    #popup-toast.success { background: #14532d; color: #86efac; border: 1px solid #166534; }
+    #popup-toast.error   { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+
+    /* ── Info links ──────────────────────────────────── */
+    .popup-footer {
+      text-align: center;
+      font-size: 11px;
+      color: #4a4a65;
+      padding-bottom: 4px;
+    }
+    .popup-footer a { color: #6c47ff; text-decoration: none; }
+    .popup-footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="popup-header">
+    <div class="popup-logo-icon">✦</div>
+    <div>
+      <div class="popup-brand">Talentify</div>
+      <div class="popup-tagline">LinkedIn Profile Analyzer AI</div>
+    </div>
+  </div>
+
+  <div class="popup-body">
+
+    <!-- Page status -->
+    <div class="status-bar" id="status-bar">
+      <div class="status-dot inactive" id="status-dot"></div>
+      <span id="status-text">Open a LinkedIn profile page to analyze</span>
+    </div>
+
+    <!-- API Key -->
+    <div>
+      <div class="section-label">OpenAI API Key</div>
+      <div class="api-key-wrap">
+        <input
+          type="password"
+          id="api-key-input"
+          class="api-key-input"
+          placeholder="sk-..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="toggle-visibility" id="toggle-visibility" title="Show/hide key">👁</button>
+      </div>
+    </div>
+
+    <!-- Save & Analyze buttons -->
+    <button class="btn-save" id="btn-save">Save API Key</button>
+    <button class="btn-analyze" id="btn-analyze" disabled>⚡ Analyze Current Profile</button>
+
+    <!-- Toast message -->
+    <div id="popup-toast"></div>
+
+    <!-- Footer -->
+    <div class="popup-footer">
+      Your API key is stored locally and never shared.<br/>
+      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">Get your OpenAI API key →</a>
+    </div>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
