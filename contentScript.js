@@ -10,7 +10,8 @@ if (window.__talentifyInjected) {
   return;
 }
 window.__talentifyInjected = true;
-let isAnalyzing = false; // Declared here so all handlers below can access it safely
+let isAnalyzing = false;
+let lastParsedProfile = null; // Store for debug view
 
 window.addEventListener('talentify_re_analyze', () => {
   isAnalyzing = false; // Reset so re-trigger always works
@@ -79,6 +80,13 @@ async function parseLinkedInProfile() {
     return "";
   }
 
+  // Helper: Find a section by its heading text (e.g., "About", "Experience")
+  function findSectionByHeading(headingText) {
+    const headings = Array.from(document.querySelectorAll("h2, h3, h4, .pvs-header__title"));
+    const target = headings.find(h => h.innerText?.toLowerCase().includes(headingText.toLowerCase()));
+    return target?.closest("section");
+  }
+
   // Step 2: Name
   const titleName = document.title?.replace(/\s*\|.*$/, "").trim() || "";
   const name = firstText(
@@ -91,96 +99,133 @@ async function parseLinkedInProfile() {
   ) || titleName;
 
   // Step 3: Headline
-  const headline = firstText(
+  // Proximity search: find the H1 (name) and look for the next text block that isn't the name itself
+  let headline = firstText(
+    "div.text-body-medium.break-words",
     ".text-body-medium.break-words",
-    ".pv-top-card-section__headline",
     ".top-card-layout__headline",
     "[data-field='headline']",
-    ".profile-info-subheader .text-body-medium",
+    ".pv-top-card-section__headline",
+    "div.ph5.pb5 div.text-body-medium",
     ".headline"
   );
+
+  if (!headline) {
+    const nameEl = document.querySelector("h1");
+    if (nameEl) {
+      // Look for any text-body-medium or break-words element in the same top-card container
+      const topCard = nameEl.closest("div.ph5") || nameEl.closest("section") || document.body;
+      const candidates = Array.from(topCard.querySelectorAll(".text-body-medium, .break-words, span, div"));
+      for (const cand of candidates) {
+        const txt = cand.innerText?.trim();
+        // The headline is usually the first significant text after the name that isn't a single word
+        if (txt && txt.length > 5 && txt !== name && !txt.includes(name) && txt.length < 250) {
+          headline = txt;
+          break;
+        }
+      }
+    }
+  }
 
   // Step 4: Location
   const location = firstText(
     ".text-body-small.inline.t-black--light.break-words",
     ".pv-top-card--list .pv-top-card--list-bullet:first-child",
-    "[data-field='location']"
+    "[data-field='location']",
+    ".pvs-header__subtitle"
   );
 
-  // Step 5: About section — try multiple strategies
+  // Step 5: About section
   let about = "";
-  const aboutSection =
+  let aboutSection =
     document.querySelector("#about")?.closest("section") ||
+    findSectionByHeading("About") ||
     document.querySelector("section[data-section='summary']") ||
     document.querySelector("section.pv-about-section");
 
   if (aboutSection) {
-    // Modern LinkedIn: the text lives in a <span aria-hidden="true"> inside the about section
     const spans = Array.from(aboutSection.querySelectorAll("span[aria-hidden='true']"));
-    // Find the longest span (the actual about text, not the "see more" button text)
     about = spans.map(s => s.innerText?.trim()).filter(Boolean).reduce((a, b) => b.length > a.length ? b : a, "");
-    if (!about) {
+    if (!about || about.length < 10) {
       about = aboutSection.querySelector(".pv-shared-text-with-see-more span")?.innerText?.trim() ||
               aboutSection.querySelector(".inline-show-more-text")?.innerText?.trim() ||
-              aboutSection.innerText?.replace("About", "").trim().slice(0, 2000) || "";
+              aboutSection.innerText?.replace("About", "").trim();
     }
   }
-  if (!about) {
-    about = firstText(".pv-about__summary-text", ".top-card-layout__description");
-  }
 
-  // Step 6: Experience — search by ID and by data-section
+  // Step 6: Experience
   const expSection =
     document.querySelector("#experience")?.closest("section") ||
+    findSectionByHeading("Experience") ||
+    findSectionByHeading("Work") ||
+    findSectionByHeading("Job") ||
     document.querySelector("section[data-section='experience']");
 
   const experience = expSection
-    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, li"))
+    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, li"))
         .map(li => {
-          // Get the key text nodes: title, company, date range
-          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true']"))
-            .map(s => s.innerText?.trim()).filter(Boolean);
-          return spans.join(" | ").replace(/\s+/g, " ").slice(0, 250);
+          // In PVS, text is often in span.visually-hidden for screen readers AND span[aria-hidden="true"] for humans
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], span.visually-hidden, .t-bold span, .t-14.t-black--light span"))
+            .map(s => s.innerText?.trim()).filter(text => text && text.length > 2);
+          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 400);
         })
-        .filter(t => t.length > 5)
-        .slice(0, 8)
+        .filter(t => t.length > 15)
+        .slice(0, 10)
     : [];
 
   // Step 7: Education
   const eduSection =
     document.querySelector("#education")?.closest("section") ||
+    findSectionByHeading("Education") ||
+    findSectionByHeading("University") ||
+    findSectionByHeading("School") ||
     document.querySelector("section[data-section='education']");
+
   const education = eduSection
-    ? Array.from(eduSection.querySelectorAll("li.artdeco-list__item, li"))
+    ? Array.from(eduSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, li"))
         .map(li => {
-          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true']"))
-            .map(s => s.innerText?.trim()).filter(Boolean);
-          return spans.join(" | ").replace(/\s+/g, " ").slice(0, 200);
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], .t-bold span, .t-14.t-black--light span"))
+            .map(s => s.innerText?.trim()).filter(text => text && text.length > 2);
+          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 300);
         })
         .filter(t => t.length > 5)
-        .slice(0, 4)
+        .slice(0, 5)
     : [];
 
   // Step 8: Skills
   const skillsSection =
     document.querySelector("#skills")?.closest("section") ||
+    findSectionByHeading("Skills") ||
+    findSectionByHeading("Endorsements") ||
     document.querySelector("section[data-section='skills']");
-  const skills = skillsSection
-    ? Array.from(skillsSection.querySelectorAll("span[aria-hidden='true']"))
+
+  let skills = skillsSection
+    ? Array.from(skillsSection.querySelectorAll("span[aria-hidden='true'], .pv-skill-category-entity__name, .pvs-list__item span"))
         .map(el => el.innerText?.trim().replace(/\s+/g, " "))
-        .filter(t => t.length > 1 && t.length < 80)
-        .filter((v, i, a) => a.indexOf(v) === i) // deduplicate
-        .slice(0, 25)
+        .filter(t => t.length > 2 && t.length < 100 && !t.includes("See all skills") && !t.includes("Endorsed by"))
     : [];
 
-  // Step 9: Connections / followers count (signals profile completeness)
+  // Backup: Extract skills from "About" if visible (common in some layouts)
+  if (skills.length === 0 && about.includes("Top skills")) {
+    const skillMatch = about.match(/Top skills\n\n(.*)/s);
+    if (skillMatch) {
+      const extracted = skillMatch[1].split(/[•|·|,]/).map(s => s.trim()).filter(s => s.length > 2);
+      skills = [...new Set([...skills, ...extracted])];
+    }
+  }
+  skills = [...new Set(skills)].slice(0, 40);
+
+  // Step 9: Connections
   const connectionsText = firstText(
     ".pv-top-card--list .pv-top-card--list-bullet:last-child",
+    ".pvs-header__subtitle span",
     "[data-field='connections'] span",
-    ".pvs-header__subtitle span"
+    ".text-body-small.t-black--light",
+    "li.text-body-small .t-black--light"
   );
 
   const parsed = { name, headline, location, about, experience, education, skills, connections: connectionsText };
+  lastParsedProfile = parsed; // Store for debug view
   console.log("[Talentify] Parsed profile:", {
     name, headline, location,
     about: about.slice(0, 100) + (about.length > 100 ? "..." : ""),
@@ -196,6 +241,29 @@ async function parseLinkedInProfile() {
   }
 
   return parsed;
+}
+
+// ── Robust Parser (Retries if data missing) ──────────────────────────────────
+async function robustParseProfile() {
+  let attempts = 0;
+  let profile = await parseLinkedInProfile();
+  
+  // If critical data is missing, scroll more aggressively and try again
+  while (attempts < 3 && (!profile.headline || profile.experience.length === 0)) {
+    console.warn(`[Talentify] Missing critical data (headline: ${!!profile.headline}, exp: ${profile.experience.length}), retrying... (Attempt ${attempts + 1})`);
+    attempts++;
+    
+    // Deeper scroll sequence to wake up lazy-loaders
+    const scrollPoints = [1000, 2000, 3000, 0];
+    for (const p of scrollPoints) {
+      window.scrollTo(0, p);
+      await new Promise(r => setTimeout(r, 800));
+    }
+    
+    profile = await parseLinkedInProfile();
+  }
+  window.scrollTo(0, 0); 
+  return profile;
 }
 
 
@@ -250,6 +318,12 @@ function buildPanelHTML() {
 
           <div class="talentify-share-section">
             <button id="talentify-copy-result" class="talentify-btn-primary">📋 Copy Results</button>
+            <button id="talentify-debug-toggle" class="talentify-btn-debug">🛠️ Debug Data</button>
+          </div>
+
+          <div id="talentify-debug-view" class="talentify-debug-panel" hidden>
+            <h3>Raw Parsed Data</h3>
+            <pre id="talentify-debug-json"></pre>
           </div>
         </div>
       </div>
@@ -354,6 +428,11 @@ function injectPanel() {
       .talentify-visibility-badge.low { background:#2a0a0a; color:#fca5a5; border-color:#5a1515; }
       .talentify-visibility-badge.medium { background:#1a1a0a; color:#fde68a; border-color:#5a5015; }
       .talentify-visibility-badge.high { background:#0a2a0a; color:#86efac; border-color:#155a15; }
+      .talentify-btn-debug { background:transparent; border:1px solid #2a2a45; color:#8b8ba8; font-size:11px; padding:4px 8px; border-radius:6px; cursor:pointer; margin-top:8px; align-self:center; transition:color 0.2s; }
+      .talentify-btn-debug:hover { color:#c4b5fd; border-color:#6c47ff44; }
+      .talentify-debug-panel { background:#000; padding:10px; border-radius:8px; margin-top:12px; font-family:monospace; font-size:10px; border:1px dashed #444; overflow-x:auto; }
+      .talentify-debug-panel h3 { font-size:11px; color:#6c47ff; margin-bottom:6px; text-transform:uppercase; }
+      .talentify-debug-panel pre { color:#86efac; white-space:pre-wrap; }
     </style>
     <div id="talentify-root">
       ${buildPanelHTML()}
@@ -416,6 +495,15 @@ function renderResults(analysis, score) {
       setTimeout(() => btn.textContent = original, 2000);
     });
   };
+
+  // Debug toggle
+  getEl("talentify-debug-toggle").onclick = () => {
+    const debugView = getEl("talentify-debug-view");
+    debugView.hidden = !debugView.hidden;
+    if (!debugView.hidden) {
+      getEl("talentify-debug-json").textContent = JSON.stringify(lastParsedProfile, null, 2);
+    }
+  };
 }
 
 function showError(message) {
@@ -440,8 +528,8 @@ async function runAnalysis() {
       injectPanel();
     }
 
-    const profile = await parseLinkedInProfile();
-    console.log("[Talentify] Profile parsed:", profile);
+    const profile = await robustParseProfile();
+    console.log("[Talentify] Final profile for analysis:", profile);
 
     if (!chrome.runtime?.id) {
       showError("Extension reloaded. Please refresh.");
