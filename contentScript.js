@@ -80,124 +80,166 @@ async function parseLinkedInProfile() {
     return "";
   }
 
-  // Helper: Find a section by its heading text (e.g., "About", "Experience")
-  function findSectionByHeading(headingText) {
-    const headings = Array.from(document.querySelectorAll("h2, h3, h4, .pvs-header__title"));
-    const target = headings.find(h => h.innerText?.toLowerCase().includes(headingText.toLowerCase()));
-    return target?.closest("section");
+  // Helper: Find a section by any means (ID, aria-label, heading text)
+  function findSectionByKeywords(keywords) {
+    const kws = Array.isArray(keywords) ? keywords : [keywords];
+    
+    // 1. Try dedicated LinkedIn attributes/IDs
+    for (const kw of kws) {
+      const lowKw = kw.toLowerCase();
+      const selectors = [
+        `section[data-section='${lowKw}']`,
+        `section#${lowKw}`,
+        `[data-member-id] section[id*='${lowKw}']`,
+        `div[data-section='${lowKw}']`,
+        `div#${lowKw}`
+      ];
+      for (const sel of selectors) {
+        const direct = document.querySelector(sel);
+        if (direct) return direct;
+      }
+    }
+
+    // 2. Try aria-labels
+    const sections = Array.from(document.querySelectorAll("section"));
+    for (const s of sections) {
+      const label = s.getAttribute("aria-label")?.toLowerCase() || "";
+      if (kws.some(kw => label.includes(kw.toLowerCase()))) return s;
+    }
+
+    // 3. Try headings
+    const headings = Array.from(document.querySelectorAll("h2, h3, .pvs-header__title, .pv-profile-section__card-heading"));
+    const target = headings.find(h => {
+      const txt = h.innerText?.toLowerCase() || "";
+      return kws.some(kw => txt.includes(kw.toLowerCase()));
+    });
+    
+    if (target) {
+      const section = target.closest("section");
+      if (section) return section;
+      
+      // Fallback: sibling traversal
+      let node = target.parentElement;
+      for (let i = 0; i < 4; i++) {
+        if (!node) break;
+        const list = node.querySelector("ul, .pvs-list, .artdeco-list");
+        if (list) return node;
+        node = node.nextElementSibling || node.parentElement;
+      }
+    }
+    return null;
   }
 
-  // Step 2: Name
+  // Step 2: Visual Elements (Photo & Banner)
+  const hasPhoto = !!(
+    document.querySelector(".pv-top-card-profile-picture img") ||
+    document.querySelector(".profile-photo-edit__preview") ||
+    document.querySelector("img.ghost-person") === null // if ghost-person is NOT there, it usually means there is a photo
+  );
+
+  const hasBanner = !!(
+    document.querySelector(".profile-background-image") ||
+    document.querySelector("[data-field='background_image']")
+  );
+
+  // Step 3: Name
   const titleName = document.title?.replace(/\s*\|.*$/, "").trim() || "";
   const name = firstText(
     "h1.inline.t-24.v-align-middle.break-words",
-    "h1.text-heading-xlarge",
-    ".pv-top-card--list li:first-child",
+    "h1",
     ".top-card-layout__title",
-    ".profile-info-subheader div:first-child",
-    "h1"
+    "[data-field='name']",
+    ".pv-top-card--list:first-child li:first-child"
   ) || titleName;
 
-  // Step 3: Headline
-  // Proximity search: find the H1 (name) and look for the next text block that isn't the name itself
+  // Step 4: Headline (Heuristic Proximity Search)
+  const junkHeadlines = ["skip to main content", "open in app", "linkedin", "home", "notifications"];
   let headline = firstText(
     "div.text-body-medium.break-words",
     ".text-body-medium.break-words",
     ".top-card-layout__headline",
     "[data-field='headline']",
     ".pv-top-card-section__headline",
-    "div.ph5.pb5 div.text-body-medium",
+    ".text-heading-medium", 
     ".headline"
   );
 
-  if (!headline) {
+  // Filter out junk
+  if (headline && junkHeadlines.some(j => headline.toLowerCase().includes(j))) {
+    headline = "";
+  }
+
+  if (!headline || headline === name) {
     const nameEl = document.querySelector("h1");
-    if (nameEl) {
-      // Look for any text-body-medium or break-words element in the same top-card container
-      const topCard = nameEl.closest("div.ph5") || nameEl.closest("section") || document.body;
-      const candidates = Array.from(topCard.querySelectorAll(".text-body-medium, .break-words, span, div"));
-      for (const cand of candidates) {
-        const txt = cand.innerText?.trim();
-        // The headline is usually the first significant text after the name that isn't a single word
-        if (txt && txt.length > 5 && txt !== name && !txt.includes(name) && txt.length < 250) {
-          headline = txt;
-          break;
-        }
-      }
+    // Restrict search to the immediate top-card container
+    const topCard = nameEl?.closest(".pv-top-card--list")?.parentElement || 
+                    nameEl?.closest("div.ph5") || 
+                    nameEl?.closest(".top-card-layout") || 
+                    document.querySelector(".pv-top-card");
+    
+    if (topCard) {
+      const candidates = Array.from(topCard.querySelectorAll(".text-body-medium, .text-heading-medium, .break-words, span, div"))
+        .map(el => el.innerText?.trim())
+        .filter(t => t && t.length > 5 && t.length < 300 && t !== name && !t.includes(name));
+      
+      headline = candidates.find(t => !t.includes("connections") && !t.includes("contact") && !junkHeadlines.some(j => t.toLowerCase().includes(j))) || headline;
     }
   }
 
-  // Step 4: Location
+  // Step 5: Location
   const location = firstText(
-    ".text-body-small.inline.t-black--light.break-words",
-    ".pv-top-card--list .pv-top-card--list-bullet:first-child",
+    "span.text-body-small.inline.t-black--light.break-words",
+    ".top-card-layout__first-subline .text-body-small",
     "[data-field='location']",
-    ".pvs-header__subtitle"
+    ".pv-top-card--list-bullet li:first-child",
+    ".top-card-layout__first-subline"
   );
 
-  // Step 5: About section
+  // Step 6: About section
   let about = "";
-  let aboutSection =
-    document.querySelector("#about")?.closest("section") ||
-    findSectionByHeading("About") ||
-    document.querySelector("section[data-section='summary']") ||
-    document.querySelector("section.pv-about-section");
-
+  let aboutSection = findSectionByKeywords(["About", "Summary"]);
+  
   if (aboutSection) {
-    const spans = Array.from(aboutSection.querySelectorAll("span[aria-hidden='true']"));
+    // Try to click "See more" if it exists
+    aboutSection.querySelector("button.inline-show-more-text__button")?.click();
+    
+    const spans = Array.from(aboutSection.querySelectorAll("span[aria-hidden='true'], .inline-show-more-text"));
     about = spans.map(s => s.innerText?.trim()).filter(Boolean).reduce((a, b) => b.length > a.length ? b : a, "");
     if (!about || about.length < 10) {
-      about = aboutSection.querySelector(".pv-shared-text-with-see-more span")?.innerText?.trim() ||
-              aboutSection.querySelector(".inline-show-more-text")?.innerText?.trim() ||
-              aboutSection.innerText?.replace("About", "").trim();
+      about = aboutSection.innerText?.replace("About", "").trim();
     }
   }
 
-  // Step 6: Experience
-  const expSection =
-    document.querySelector("#experience")?.closest("section") ||
-    findSectionByHeading("Experience") ||
-    findSectionByHeading("Work") ||
-    findSectionByHeading("Job") ||
-    document.querySelector("section[data-section='experience']");
-
+  // Step 7: Experience
+  const expSection = findSectionByKeywords(["Experience", "Work", "Job", "Employment"]);
   const experience = expSection
-    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, li"))
+    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, .experience-item, li"))
         .map(li => {
-          // In PVS, text is often in span.visually-hidden for screen readers AND span[aria-hidden="true"] for humans
-          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], span.visually-hidden, .t-bold span, .t-14.t-black--light span"))
+          li.querySelector("button.inline-show-more-text__button")?.click();
+          // Look for title and company in t-bold and t-normal classes
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], .t-bold span, .t-14 span, .pvs-entity__headline span, .t-normal span"))
             .map(s => s.innerText?.trim()).filter(text => text && text.length > 2);
-          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 400);
+          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 500);
         })
         .filter(t => t.length > 15)
         .slice(0, 10)
     : [];
 
-  // Step 7: Education
-  const eduSection =
-    document.querySelector("#education")?.closest("section") ||
-    findSectionByHeading("Education") ||
-    findSectionByHeading("University") ||
-    findSectionByHeading("School") ||
-    document.querySelector("section[data-section='education']");
-
+  // Step 8: Education
+  const eduSection = findSectionByKeywords(["Education", "University", "School", "College"]) || document.querySelector("#education")?.closest("section");
   const education = eduSection
     ? Array.from(eduSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, li"))
         .map(li => {
-          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], .t-bold span, .t-14.t-black--light span"))
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], .t-bold span, .t-14 span"))
             .map(s => s.innerText?.trim()).filter(text => text && text.length > 2);
-          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 300);
+          return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 400);
         })
-        .filter(t => t.length > 5)
+        .filter(t => t.length > 10)
         .slice(0, 5)
     : [];
 
-  // Step 8: Skills
-  const skillsSection =
-    document.querySelector("#skills")?.closest("section") ||
-    findSectionByHeading("Skills") ||
-    findSectionByHeading("Endorsements") ||
-    document.querySelector("section[data-section='skills']");
+  // Step 9: Skills
+  const skillsSection = findSectionByKeywords(["Skills", "Endorsements"]);
 
   let skills = skillsSection
     ? Array.from(skillsSection.querySelectorAll("span[aria-hidden='true'], .pv-skill-category-entity__name, .pvs-list__item span"))
@@ -215,16 +257,55 @@ async function parseLinkedInProfile() {
   }
   skills = [...new Set(skills)].slice(0, 40);
 
-  // Step 9: Connections
+  // Step 10: Social Proof (Recommendations)
+  const recSection = findSectionByKeywords(["Recommendations"]);
+  const recommendationsCount = recSection
+    ? recSection.querySelectorAll("li").length
+    : 0;
+
+  // Step 11: Activity
+  const activitySection = findSectionByKeywords(["Activity"]);
+  const activity = activitySection
+    ? Array.from(activitySection.querySelectorAll("span[aria-hidden='true'], .pvs-header__subtitle"))
+        .map(el => el.innerText?.trim())
+        .filter(t => t && t.length > 5)
+        .slice(0, 3)
+        .join(" | ")
+    : "No recent activity found";
+
+  // Step 12: Featured Section (Links/GitHub/Portfolio)
+  const featuredSection = findSectionByKeywords(["Featured"]);
+  const featuredLinks = featuredSection
+    ? Array.from(featuredSection.querySelectorAll("a"))
+        .map(a => a.href)
+        .filter(href => !href.includes("linkedin.com")) // Focus on external links
+    : [];
+
+  // Step 12: Connections
   const connectionsText = firstText(
     ".pv-top-card--list .pv-top-card--list-bullet:last-child",
     ".pvs-header__subtitle span",
     "[data-field='connections'] span",
+    ".top-card-layout__first-subline span.text-body-small",
     ".text-body-small.t-black--light",
     "li.text-body-small .t-black--light"
   );
 
-  const parsed = { name, headline, location, about, experience, education, skills, connections: connectionsText };
+  const parsed = { 
+    name, 
+    headline, 
+    location, 
+    about, 
+    experience, 
+    education, 
+    skills, 
+    connections: connectionsText,
+    hasPhoto,
+    hasBanner,
+    recommendationsCount,
+    activity,
+    featuredLinks
+  };
   lastParsedProfile = parsed; // Store for debug view
   console.log("[Talentify] Parsed profile:", {
     name, headline, location,
@@ -309,6 +390,11 @@ function buildPanelHTML() {
           <div class="talentify-card">
             <h3 class="talentify-card-title">🛡️ Recruiter Visibility</h3>
             <div id="talentify-visibility" class="talentify-visibility-badge">Calculating...</div>
+          </div>
+
+          <div class="talentify-card" id="talentify-breakdown-card">
+            <h3 class="talentify-card-title">📊 Score Breakdown</h3>
+            <div id="talentify-score-breakdown" class="talentify-breakdown-list"></div>
           </div>
 
           <div class="talentify-card">
@@ -428,6 +514,11 @@ function injectPanel() {
       .talentify-visibility-badge.low { background:#2a0a0a; color:#fca5a5; border-color:#5a1515; }
       .talentify-visibility-badge.medium { background:#1a1a0a; color:#fde68a; border-color:#5a5015; }
       .talentify-visibility-badge.high { background:#0a2a0a; color:#86efac; border-color:#155a15; }
+      .talentify-breakdown-list { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+      .talentify-breakdown-item { display:flex; flex-direction:column; gap:4px; }
+      .talentify-breakdown-label-row { display:flex; justify-content:space-between; font-size:11px; color:#8b8ba8; }
+      .talentify-breakdown-bar-bg { height:4px; background:#1e1e35; border-radius:2px; overflow:hidden; }
+      .talentify-breakdown-bar-fill { height:100%; background:linear-gradient(90deg, #6c47ff, #a855f7); border-radius:2px; transition:width 0.8s cubic-bezier(0.34,1.56,0.64,1); }
       .talentify-btn-debug { background:transparent; border:1px solid #2a2a45; color:#8b8ba8; font-size:11px; padding:4px 8px; border-radius:6px; cursor:pointer; margin-top:8px; align-self:center; transition:color 0.2s; }
       .talentify-btn-debug:hover { color:#c4b5fd; border-color:#6c47ff44; }
       .talentify-debug-panel { background:#000; padding:10px; border-radius:8px; margin-top:12px; font-family:monospace; font-size:10px; border:1px dashed #444; overflow-x:auto; }
@@ -477,6 +568,43 @@ function renderResults(analysis, score) {
   const visEl = getEl("talentify-visibility");
   visEl.textContent = analysis.recruiterVisibility || "Unknown";
   visEl.className = "talentify-visibility-badge " + (analysis.recruiterVisibility?.toLowerCase() || "");
+
+  // Render breakdown
+  const bdList = getEl("talentify-score-breakdown");
+  bdList.innerHTML = "";
+  if (analysis.breakdown) {
+    const labels = {
+      profileStrength: "Profile Strength (20)",
+      about: "About Section (15)",
+      experience: "Experience (20)",
+      skills: "Skills (15)",
+      socialProof: "Social Proof (10)",
+      network: "Network (10)",
+      activity: "Activity (10)"
+    };
+    const max = { profileStrength: 20, about: 15, experience: 20, skills: 15, socialProof: 10, network: 10, activity: 10 };
+    
+    Object.entries(analysis.breakdown).forEach(([key, val]) => {
+      const item = document.createElement("div");
+      item.className = "talentify-breakdown-item";
+      const pct = (val / (max[key] || 100)) * 100;
+      item.innerHTML = `
+        <div class="talentify-breakdown-label-row">
+          <span>${labels[key] || key}</span>
+          <span>${val}</span>
+        </div>
+        <div class="talentify-breakdown-bar-bg">
+          <div class="talentify-breakdown-bar-fill" style="width: 0%"></div>
+        </div>
+      `;
+      bdList.appendChild(item);
+      setTimeout(() => {
+        item.querySelector(".talentify-breakdown-bar-fill").style.width = pct + "%";
+      }, 100);
+    });
+  } else {
+    getEl("talentify-breakdown-card").hidden = true;
+  }
 
   const impList = getEl("talentify-improvements");
   impList.innerHTML = "";
