@@ -54,17 +54,26 @@ document.getElementById("btn-analyze").addEventListener("click", async () => {
     return;
   }
 
-  // Inject the content script programmatically (in case it wasn't auto-injected)
   try {
+    // Always inject the script — if it's already running, the IIFE guard
+    // will dispatch 'talentify_re_analyze' and return early, re-triggering analysis.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["contentScript.js"],
     });
-    showToast("Analyzing profile…", "success");
-    window.close(); // close popup so the panel is visible
+    showToast("Analyzing…", "success");
   } catch (err) {
-    showToast(`Error: ${err.message}`, "error");
+    // Already injected — send a message to trigger re-analysis
+    try {
+      await chrome.tabs.sendMessage(tab.id, { action: "TRIGGER_ANALYSIS" });
+    } catch (msgErr) {
+      showToast("Could not reach content script. Try refreshing the page.", "error");
+      return;
+    }
   }
+
+  // Small delay so the user sees the toast before popup closes
+  setTimeout(() => window.close(), 600);
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

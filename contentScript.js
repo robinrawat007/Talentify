@@ -19,6 +19,19 @@ window.addEventListener('talentify_re_analyze', () => {
   }
 });
 
+// Listen for messages from the popup's Analyze button
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === "TRIGGER_ANALYSIS") {
+    // Reset so a second click always works, even if a previous run is stuck
+    isAnalyzing = false;
+    if (document.getElementById("talentify-host")) {
+      runAnalysis();
+    } else {
+      initTalentify();
+    }
+  }
+});
+
 // ── Helpers: DOM waiting ───────────────────────────────────────────────────
 function waitForElement(selector, timeout = 8000) {
   return new Promise((resolve) => {
@@ -223,7 +236,14 @@ async function runAnalysis() {
   isAnalyzing = true;
 
   try {
+    // Ensure the panel exists in the DOM before touching its elements
+    if (!document.getElementById("talentify-host")) {
+      injectPanel();
+    }
+
     const profile = await parseLinkedInProfile();
+    console.log("[Talentify] Profile parsed:", profile);
+
     if (!chrome.runtime?.id) {
       showError("Extension reloaded. Please refresh.");
       isAnalyzing = false;
@@ -234,8 +254,18 @@ async function runAnalysis() {
     getEl("talentify-results").hidden = true;
     getEl("talentify-error").hidden = true;
 
+    // 30-second timeout in case Supabase/Groq hangs
+    const timeout = setTimeout(() => {
+      if (isAnalyzing) {
+        isAnalyzing = false;
+        showError("Analysis timed out. Please try again.");
+      }
+    }, 30000);
+
     chrome.runtime.sendMessage({ action: "ANALYZE_PROFILE", profile }, (response) => {
+      clearTimeout(timeout);
       isAnalyzing = false;
+      console.log("[Talentify] Response:", response);
       if (chrome.runtime.lastError) {
         showError("Connection lost: " + chrome.runtime.lastError.message);
         return;
@@ -248,6 +278,7 @@ async function runAnalysis() {
     });
   } catch (err) {
     isAnalyzing = false;
+    console.error("[Talentify] Error:", err);
     showError(err.message || "Parse failed.");
   }
 }
