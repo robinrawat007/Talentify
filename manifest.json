@@ -11,7 +11,8 @@
   ],
 
   "host_permissions": [
-    "https://*.linkedin.com/*"
+    "https://*.linkedin.com/*",
+    "https://*.supabase.co/*"
   ],
 
   "background": {

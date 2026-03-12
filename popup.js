@@ -44,45 +44,7 @@ async function init() {
     statusText.textContent = "Open a LinkedIn profile page to analyze";
     analyzeBtn.disabled = true;
   }
-
-  // Load saved API key (masked)
-  chrome.runtime.sendMessage({ action: "GET_API_KEY" }, (response) => {
-    if (response?.apiKey) {
-      document.getElementById("api-key-input").value = response.apiKey;
-    }
-  });
 }
-
-// ── Toggle key visibility ─────────────────────────────────────────────────────
-document.getElementById("toggle-visibility").addEventListener("click", () => {
-  const input = document.getElementById("api-key-input");
-  const btn = document.getElementById("toggle-visibility");
-  if (input.type === "password") {
-    input.type = "text";
-    btn.textContent = "🔒";
-    btn.title = "Hide key";
-  } else {
-    input.type = "password";
-    btn.textContent = "👁";
-    btn.title = "Show key";
-  }
-});
-
-// ── Save API key ──────────────────────────────────────────────────────────────
-document.getElementById("btn-save").addEventListener("click", () => {
-  const key = document.getElementById("api-key-input").value.trim();
-  if (!key) {
-    showToast("Please enter an API key.", "error");
-    return;
-  }
-  if (!key.startsWith("sk-")) {
-    showToast("Key should start with sk-", "error");
-    return;
-  }
-  chrome.runtime.sendMessage({ action: "SAVE_API_KEY", apiKey: key }, () => {
-    showToast("API key saved securely ✓", "success");
-  });
-});
 
 // ── Analyze current profile ───────────────────────────────────────────────────
 document.getElementById("btn-analyze").addEventListener("click", async () => {
