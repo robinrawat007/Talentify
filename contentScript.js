@@ -59,33 +59,57 @@ function waitForElement(selector, timeout = 8000) {
 async function parseLinkedInProfile() {
   await waitForElement("h1", 8000);
 
-  const name = document.querySelector("h1")?.innerText?.trim() || "";
-  const headline = document.querySelector(".text-body-medium")?.innerText?.trim() || "";
-  
+  // Name — multiple fallbacks for LinkedIn's changing DOM
+  const name =
+    document.querySelector("h1.inline.t-24")?.innerText?.trim() ||
+    document.querySelector("h1.text-heading-xlarge")?.innerText?.trim() ||
+    document.querySelector(".pv-text-details__left-panel h1")?.innerText?.trim() ||
+    document.querySelector("h1")?.innerText?.trim() ||
+    "";
+
+  // Headline
+  const headline =
+    document.querySelector(".text-body-medium.break-words")?.innerText?.trim() ||
+    document.querySelector(".pv-text-details__left-panel .text-body-medium")?.innerText?.trim() ||
+    document.querySelector(".text-body-medium")?.innerText?.trim() ||
+    "";
+
   const allSections = Array.from(document.querySelectorAll("section"));
 
-  // About
-  const aboutSection = allSections.find((s) => s.innerText?.includes("About"));
-  const about = aboutSection?.querySelector("span[aria-hidden='true']")?.innerText?.trim() || "";
+  // About — look for the section with id containing 'about'
+  const aboutSection =
+    document.querySelector("section#about") ||
+    document.querySelector("div[data-generated-suggestion-target='urn:li:fs_aboutPrompt']")?.closest("section") ||
+    allSections.find((s) => s.querySelector("#about") || s.innerText?.startsWith("About"));
+  const about =
+    aboutSection?.querySelector(".visually-hidden + div span[aria-hidden='true']")?.innerText?.trim() ||
+    aboutSection?.querySelector("span[aria-hidden='true']")?.innerText?.trim() ||
+    aboutSection?.querySelector(".pv-shared-text-with-see-more")?.innerText?.trim() ||
+    "";
 
   // Experience
-  const expSection = allSections.find((s) => s.innerText?.includes("Experience"));
+  const expSection =
+    document.querySelector("section#experience") ||
+    allSections.find((s) => s.querySelector("#experience") || s.innerText?.startsWith("Experience"));
   const experience = expSection
-    ? Array.from(expSection.querySelectorAll("li"))
-        .map((li) => li.innerText?.trim().replace(/\s+/g, " "))
+    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item"))
+        .map((li) => li.innerText?.trim().replace(/\s+/g, " ").slice(0, 200))
         .filter(Boolean)
-        .slice(0, 10)
+        .slice(0, 8)
     : [];
 
   // Skills
-  const skillsSection = allSections.find((s) => s.innerText?.includes("Skills"));
+  const skillsSection =
+    document.querySelector("section#skills") ||
+    allSections.find((s) => s.querySelector("#skills") || s.innerText?.startsWith("Skills"));
   const skills = skillsSection
-    ? Array.from(skillsSection.querySelectorAll("li"))
-        .map((li) => li.innerText?.trim().replace(/\s+/g, " "))
+    ? Array.from(skillsSection.querySelectorAll(".pvs-entity span[aria-hidden='true']"))
+        .map((el) => el.innerText?.trim())
         .filter(Boolean)
         .slice(0, 20)
     : [];
 
+  console.log("[Talentify] Parsed:", { name, headline, about: about.slice(0,50), experience: experience.length, skills: skills.length });
   return { name, headline, about, experience, skills };
 }
 
@@ -157,6 +181,8 @@ function injectPanel() {
 
   shadow.innerHTML = `
     <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      [hidden] { display: none !important; }
       #talentify-root {
         position: fixed; top: 80px; right: 20px; z-index: 999999;
         width: 380px; max-height: calc(100vh - 100px);
