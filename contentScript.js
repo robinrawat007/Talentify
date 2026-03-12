@@ -84,13 +84,19 @@ async function parseLinkedInProfile() {
   function findSectionByKeywords(keywords) {
     const kws = Array.isArray(keywords) ? keywords : [keywords];
     
-    // 1. Try dedicated LinkedIn attributes/IDs
+    // 1. Try dedicated LinkedIn attributes/IDs or anchors
     for (const kw of kws) {
       const lowKw = kw.toLowerCase();
+      // Sometimes the ID is on an anchor tag <div id="experience"></div> right before or inside the section
+      const anchor = document.getElementById(lowKw) || document.querySelector(`[id*='${lowKw}']`);
+      if (anchor) {
+        const closestSection = anchor.closest("section") || anchor.parentElement?.closest("section");
+        if (closestSection) return closestSection;
+      }
+      
       const selectors = [
         `section[data-section='${lowKw}']`,
         `section#${lowKw}`,
-        `[data-member-id] section[id*='${lowKw}']`,
         `div[data-section='${lowKw}']`,
         `div#${lowKw}`
       ];
@@ -118,12 +124,11 @@ async function parseLinkedInProfile() {
       const section = target.closest("section");
       if (section) return section;
       
-      // Fallback: sibling traversal
+      // Fallback: sibling traversal - find the next element that HAS a list
       let node = target.parentElement;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         if (!node) break;
-        const list = node.querySelector("ul, .pvs-list, .artdeco-list");
-        if (list) return node;
+        if (node.querySelector("ul, .pvs-list, .artdeco-list, .experience-item")) return node;
         node = node.nextElementSibling || node.parentElement;
       }
     }
@@ -143,56 +148,44 @@ async function parseLinkedInProfile() {
   );
 
   // Step 3: Name
-  const titleName = document.title?.replace(/\s*\|.*$/, "").trim() || "";
-  const name = firstText(
-    "h1.inline.t-24.v-align-middle.break-words",
-    "h1",
-    ".top-card-layout__title",
-    "[data-field='name']",
-    ".pv-top-card--list:first-child li:first-child"
-  ) || titleName;
+  const nameEl = document.querySelector("h1");
+  const name = nameEl?.innerText?.trim() || document.title?.replace(/\s*\|.*$/, "").trim() || "";
 
-  // Step 4: Headline (Heuristic Proximity Search)
-  const junkHeadlines = ["skip to main content", "open in app", "linkedin", "home", "notifications"];
-  let headline = firstText(
-    "div.text-body-medium.break-words",
-    ".text-body-medium.break-words",
-    ".top-card-layout__headline",
-    "[data-field='headline']",
-    ".pv-top-card-section__headline",
-    ".text-heading-medium", 
-    ".headline"
-  );
-
-  // Filter out junk
-  if (headline && junkHeadlines.some(j => headline.toLowerCase().includes(j))) {
-    headline = "";
-  }
-
-  if (!headline || headline === name) {
-    const nameEl = document.querySelector("h1");
-    // Restrict search to the immediate top-card container
-    const topCard = nameEl?.closest(".pv-top-card--list")?.parentElement || 
-                    nameEl?.closest("div.ph5") || 
-                    nameEl?.closest(".top-card-layout") || 
-                    document.querySelector(".pv-top-card");
-    
-    if (topCard) {
-      const candidates = Array.from(topCard.querySelectorAll(".text-body-medium, .text-heading-medium, .break-words, span, div"))
-        .map(el => el.innerText?.trim())
-        .filter(t => t && t.length > 5 && t.length < 300 && t !== name && !t.includes(name));
-      
-      headline = candidates.find(t => !t.includes("connections") && !t.includes("contact") && !junkHeadlines.some(j => t.toLowerCase().includes(j))) || headline;
+  // Step 4: Headline (Visual Structure Search)
+  // The headline is almost always the element immediately following the name's container
+  let headline = "";
+  if (nameEl) {
+    const headlineCandidates = [
+      nameEl.parentElement?.nextElementSibling,
+      nameEl.closest(".pv-text-details__left-panel")?.querySelector(".text-body-medium"),
+      nameEl.closest(".mt2")?.querySelector(".text-body-medium"),
+      document.querySelector(".text-body-medium.break-words")
+    ];
+    for (const cand of headlineCandidates) {
+      const txt = cand?.innerText?.trim();
+      if (txt && txt.length > 5 && !txt.includes("Skip to main")) {
+         headline = txt;
+         break;
+      }
     }
+  }
+  
+  // Final fallback for headline
+  if (!headline) {
+    headline = firstText(
+      ".text-body-medium.break-words",
+      ".top-card-layout__headline",
+      "[data-field='headline']",
+      ".pv-top-card-section__headline"
+    );
   }
 
   // Step 5: Location
   const location = firstText(
-    "span.text-body-small.inline.t-black--light.break-words",
+    ".text-body-small.inline.t-black--light.break-words",
     ".top-card-layout__first-subline .text-body-small",
-    "[data-field='location']",
-    ".pv-top-card--list-bullet li:first-child",
-    ".top-card-layout__first-subline"
+    ".pv-text-details__left-panel--inline-indicator .text-body-small",
+    "[data-field='location']"
   );
 
   // Step 6: About section
@@ -215,8 +208,10 @@ async function parseLinkedInProfile() {
   const experience = expSection
     ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, .pvs-list__item, .experience-item, li"))
         .map(li => {
-          li.querySelector("button.inline-show-more-text__button")?.click();
-          // Look for title and company in t-bold and t-normal classes
+          // Click "See more" buttons within each item to reveal deep content
+          li.querySelectorAll("button.inline-show-more-text__button, button.artdeco-button--tertiary").forEach(btn => {
+            if (btn.innerText.toLowerCase().includes("see more")) btn.click();
+          });
           const spans = Array.from(li.querySelectorAll("span[aria-hidden='true'], .t-bold span, .t-14 span, .pvs-entity__headline span, .t-normal span"))
             .map(s => s.innerText?.trim()).filter(text => text && text.length > 2);
           return [...new Set(spans)].join(" | ").replace(/\s+/g, " ").slice(0, 500);
@@ -281,14 +276,14 @@ async function parseLinkedInProfile() {
         .filter(href => !href.includes("linkedin.com")) // Focus on external links
     : [];
 
-  // Step 12: Connections
+  // Step 12: Connections & Network
   const connectionsText = firstText(
-    ".pv-top-card--list .pv-top-card--list-bullet:last-child",
+    ".pv-top-card--list-bullet li:last-child",
+    ".pv-top-card--list li:last-child",
+    ".text-body-small.t-black--light.inline-block",
     ".pvs-header__subtitle span",
     "[data-field='connections'] span",
-    ".top-card-layout__first-subline span.text-body-small",
-    ".text-body-small.t-black--light",
-    "li.text-body-small .t-black--light"
+    "span.link-without-visited-state"
   );
 
   const parsed = { 
