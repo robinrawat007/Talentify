@@ -57,61 +57,147 @@ function waitForElement(selector, timeout = 8000) {
 
 // ── LinkedIn Profile Parser ──────────────────────────────────────────────────
 async function parseLinkedInProfile() {
-  await waitForElement("h1", 8000);
+  // Step 1: Scroll to trigger LinkedIn's lazy loading
+  window.scrollTo(0, 300);
+  await new Promise(r => setTimeout(r, 800));
+  window.scrollTo(0, document.body.scrollHeight / 3);
+  await new Promise(r => setTimeout(r, 800));
+  window.scrollTo(0, document.body.scrollHeight / 2);
+  await new Promise(r => setTimeout(r, 800));
+  window.scrollTo(0, 0);
+  await new Promise(r => setTimeout(r, 600));
 
-  // Name — multiple fallbacks for LinkedIn's changing DOM
-  const name =
-    document.querySelector("h1.inline.t-24")?.innerText?.trim() ||
-    document.querySelector("h1.text-heading-xlarge")?.innerText?.trim() ||
-    document.querySelector(".pv-text-details__left-panel h1")?.innerText?.trim() ||
-    document.querySelector("h1")?.innerText?.trim() ||
-    "";
+  // Helper: get first non-empty text from a list of selectors
+  function firstText(...selectors) {
+    for (const sel of selectors) {
+      try {
+        const el = document.querySelector(sel);
+        const text = el?.innerText?.trim() || el?.textContent?.trim();
+        if (text) return text;
+      } catch(e) {}
+    }
+    return "";
+  }
 
-  // Headline
-  const headline =
-    document.querySelector(".text-body-medium.break-words")?.innerText?.trim() ||
-    document.querySelector(".pv-text-details__left-panel .text-body-medium")?.innerText?.trim() ||
-    document.querySelector(".text-body-medium")?.innerText?.trim() ||
-    "";
+  // Step 2: Name
+  const titleName = document.title?.replace(/\s*\|.*$/, "").trim() || "";
+  const name = firstText(
+    "h1.inline.t-24.v-align-middle.break-words",
+    "h1.text-heading-xlarge",
+    ".pv-top-card--list li:first-child",
+    ".top-card-layout__title",
+    ".profile-info-subheader div:first-child",
+    "h1"
+  ) || titleName;
 
-  const allSections = Array.from(document.querySelectorAll("section"));
+  // Step 3: Headline
+  const headline = firstText(
+    ".text-body-medium.break-words",
+    ".pv-top-card-section__headline",
+    ".top-card-layout__headline",
+    "[data-field='headline']",
+    ".profile-info-subheader .text-body-medium",
+    ".headline"
+  );
 
-  // About — look for the section with id containing 'about'
+  // Step 4: Location
+  const location = firstText(
+    ".text-body-small.inline.t-black--light.break-words",
+    ".pv-top-card--list .pv-top-card--list-bullet:first-child",
+    "[data-field='location']"
+  );
+
+  // Step 5: About section — try multiple strategies
+  let about = "";
   const aboutSection =
-    document.querySelector("section#about") ||
-    document.querySelector("div[data-generated-suggestion-target='urn:li:fs_aboutPrompt']")?.closest("section") ||
-    allSections.find((s) => s.querySelector("#about") || s.innerText?.startsWith("About"));
-  const about =
-    aboutSection?.querySelector(".visually-hidden + div span[aria-hidden='true']")?.innerText?.trim() ||
-    aboutSection?.querySelector("span[aria-hidden='true']")?.innerText?.trim() ||
-    aboutSection?.querySelector(".pv-shared-text-with-see-more")?.innerText?.trim() ||
-    "";
+    document.querySelector("#about")?.closest("section") ||
+    document.querySelector("section[data-section='summary']") ||
+    document.querySelector("section.pv-about-section");
 
-  // Experience
+  if (aboutSection) {
+    // Modern LinkedIn: the text lives in a <span aria-hidden="true"> inside the about section
+    const spans = Array.from(aboutSection.querySelectorAll("span[aria-hidden='true']"));
+    // Find the longest span (the actual about text, not the "see more" button text)
+    about = spans.map(s => s.innerText?.trim()).filter(Boolean).reduce((a, b) => b.length > a.length ? b : a, "");
+    if (!about) {
+      about = aboutSection.querySelector(".pv-shared-text-with-see-more span")?.innerText?.trim() ||
+              aboutSection.querySelector(".inline-show-more-text")?.innerText?.trim() ||
+              aboutSection.innerText?.replace("About", "").trim().slice(0, 2000) || "";
+    }
+  }
+  if (!about) {
+    about = firstText(".pv-about__summary-text", ".top-card-layout__description");
+  }
+
+  // Step 6: Experience — search by ID and by data-section
   const expSection =
-    document.querySelector("section#experience") ||
-    allSections.find((s) => s.querySelector("#experience") || s.innerText?.startsWith("Experience"));
+    document.querySelector("#experience")?.closest("section") ||
+    document.querySelector("section[data-section='experience']");
+
   const experience = expSection
-    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item"))
-        .map((li) => li.innerText?.trim().replace(/\s+/g, " ").slice(0, 200))
-        .filter(Boolean)
+    ? Array.from(expSection.querySelectorAll("li.artdeco-list__item, li"))
+        .map(li => {
+          // Get the key text nodes: title, company, date range
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true']"))
+            .map(s => s.innerText?.trim()).filter(Boolean);
+          return spans.join(" | ").replace(/\s+/g, " ").slice(0, 250);
+        })
+        .filter(t => t.length > 5)
         .slice(0, 8)
     : [];
 
-  // Skills
-  const skillsSection =
-    document.querySelector("section#skills") ||
-    allSections.find((s) => s.querySelector("#skills") || s.innerText?.startsWith("Skills"));
-  const skills = skillsSection
-    ? Array.from(skillsSection.querySelectorAll(".pvs-entity span[aria-hidden='true']"))
-        .map((el) => el.innerText?.trim())
-        .filter(Boolean)
-        .slice(0, 20)
+  // Step 7: Education
+  const eduSection =
+    document.querySelector("#education")?.closest("section") ||
+    document.querySelector("section[data-section='education']");
+  const education = eduSection
+    ? Array.from(eduSection.querySelectorAll("li.artdeco-list__item, li"))
+        .map(li => {
+          const spans = Array.from(li.querySelectorAll("span[aria-hidden='true']"))
+            .map(s => s.innerText?.trim()).filter(Boolean);
+          return spans.join(" | ").replace(/\s+/g, " ").slice(0, 200);
+        })
+        .filter(t => t.length > 5)
+        .slice(0, 4)
     : [];
 
-  console.log("[Talentify] Parsed:", { name, headline, about: about.slice(0,50), experience: experience.length, skills: skills.length });
-  return { name, headline, about, experience, skills };
+  // Step 8: Skills
+  const skillsSection =
+    document.querySelector("#skills")?.closest("section") ||
+    document.querySelector("section[data-section='skills']");
+  const skills = skillsSection
+    ? Array.from(skillsSection.querySelectorAll("span[aria-hidden='true']"))
+        .map(el => el.innerText?.trim().replace(/\s+/g, " "))
+        .filter(t => t.length > 1 && t.length < 80)
+        .filter((v, i, a) => a.indexOf(v) === i) // deduplicate
+        .slice(0, 25)
+    : [];
+
+  // Step 9: Connections / followers count (signals profile completeness)
+  const connectionsText = firstText(
+    ".pv-top-card--list .pv-top-card--list-bullet:last-child",
+    "[data-field='connections'] span",
+    ".pvs-header__subtitle span"
+  );
+
+  const parsed = { name, headline, location, about, experience, education, skills, connections: connectionsText };
+  console.log("[Talentify] Parsed profile:", {
+    name, headline, location,
+    about: about.slice(0, 100) + (about.length > 100 ? "..." : ""),
+    experienceCount: experience.length,
+    educationCount: education.length,
+    skillsCount: skills.length,
+    connections: connectionsText
+  });
+
+  // Warn if the profile seems empty (likely a parsing failure)
+  if (!name && !headline && experience.length === 0 && skills.length === 0) {
+    console.warn("[Talentify] ⚠️ Profile data appears empty — LinkedIn DOM may have changed or page hasn't loaded yet.");
+  }
+
+  return parsed;
 }
+
 
 // ── Panel HTML builder ───────────────────────────────────────────────────────
 function buildPanelHTML() {

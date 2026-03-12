@@ -3,7 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // Groq is OpenAI-compatible & FREE — 14,400 requests/day
 const AI_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const AI_MODEL = "llama-3.3-70b-versatile"; // Free, fast, and capable
+const AI_MODEL = "llama-3.3-70b-versatile";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -20,9 +20,7 @@ serve(async (req) => {
   try {
     const profile = await req.json();
 
-    // Reads from Supabase Secrets — never exposed to the extension
     const apiKey = Deno.env.get("GROQ_API_KEY");
-
     if (!apiKey) {
       return new Response(
         JSON.stringify({ error: "GROQ_API_KEY secret is not set in Supabase." }),
@@ -30,15 +28,32 @@ serve(async (req) => {
       );
     }
 
-    const prompt = `You are a professional LinkedIn coach. Analyze this profile and return ONLY a valid JSON object (no markdown, no explanation):
-${JSON.stringify(profile)}
+    const systemPrompt = `You are an expert LinkedIn career coach and recruiter. Analyze LinkedIn profile data and return a JSON assessment.
 
+Return ONLY a valid JSON object. No markdown, no code fences, no explanation.
+Required JSON structure:
 {
-  "score": <number 0-100>,
-  "improvements": ["<actionable tip>", "<actionable tip>", "<actionable tip>"],
-  "recruiterVisibility": "Low" or "Medium" or "High",
-  "recruiterImpression": "<one sentence first impression a recruiter would have>"
-}`;
+  "score": <integer 0-100>,
+  "recruiterVisibility": "Low" | "Medium" | "High",
+  "improvements": ["tip1", "tip2", "tip3", "tip4"],
+  "recruiterImpression": "<one sentence first impression>"
+}
+
+Scoring guide:
+- 85-100: Excellent — strong headline, detailed About, 5+ jobs, education, 15+ skills
+- 65-84: Good — most sections filled, minor gaps
+- 45-64: Average — some key sections present but incomplete
+- 25-44: Below average — minimal info, missing critical sections
+- 10-24: Poor — barely any data (only name or title visible)
+- 0-9: Reserve for a completely empty profile (no name, no title, nothing)
+
+IMPORTANT: If the profile has a name OR a headline OR any experience entries, the minimum score is 15.
+Always provide 4 specific, actionable improvement suggestions relevant to what is actually missing.`;
+
+    const userPrompt = `Profile data to analyze:
+${JSON.stringify(profile, null, 2)}
+
+Return the JSON assessment now.`;
 
     const aiRes = await fetch(AI_API_URL, {
       method: "POST",
@@ -48,8 +63,11 @@ ${JSON.stringify(profile)}
       },
       body: JSON.stringify({
         model: AI_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.5,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.3,
         response_format: { type: "json_object" },
       }),
     });
@@ -71,7 +89,24 @@ ${JSON.stringify(profile)}
       );
     }
 
-    const result = JSON.parse(content);
+    // Strip any accidental markdown fences
+    let jsonStr = content.trim();
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) jsonStr = fenceMatch[1].trim();
+
+    const result = JSON.parse(jsonStr);
+
+    // Sanitize score
+    if (typeof result.score !== "number") {
+      result.score = parseInt(String(result.score)) || 10;
+    }
+    result.score = Math.min(Math.max(Math.round(result.score), 0), 100);
+
+    // Ensure improvements is always an array
+    if (!Array.isArray(result.improvements)) {
+      result.improvements = [result.improvements || "Complete your profile sections for better visibility."];
+    }
+
     return new Response(JSON.stringify(result), { headers: CORS_HEADERS });
 
   } catch (err) {
